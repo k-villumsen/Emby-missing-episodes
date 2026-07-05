@@ -4,7 +4,7 @@
     <TargetFramework>netstandard2.0</TargetFramework>
     <RootNamespace>Emby.MissingEpisodesTracker</RootNamespace>
     <AssemblyName>Emby.MissingEpisodesTracker</AssemblyName>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <LangVersion>8.0</LangVersion>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
