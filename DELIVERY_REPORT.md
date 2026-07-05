@@ -1,6 +1,12 @@
-# Delivery Report — Emby Missing Episodes Tracker v0.1.0
+# Delivery Report — Emby Missing Episodes Tracker v0.3.0
 
-**Mode:** GREENFIELD · **Date:** 2026-07-05 · **Repo:** `D:\Claude.AI_work\Emby-missing-episodes` (master `532c551`)
+**Mode:** GREENFIELD · **Date:** 2026-07-05 · **Repo:** `D:\Claude.AI_work\Emby-missing-episodes` (master `b02460e`)
+
+> **v0.3.0 update — LIVE-VERIFIED on the production server.** The original data-source
+> assumption (internal virtual-episode query) proved wrong on Emby 4.9: missing episodes are
+> computed dynamically by `/Shows/Missing` and have no database rows. The scan now self-calls
+> that endpoint (API key in plugin settings) and feeds the unchanged ledger machinery.
+> First live scan: 7,034 missing tracked in 14 s; dashboard reads are instant from state.
 
 ## What was built
 
