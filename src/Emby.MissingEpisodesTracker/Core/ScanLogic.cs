@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 
 namespace Emby.MissingEpisodesTracker.Core
 {
@@ -25,7 +26,8 @@ namespace Emby.MissingEpisodesTracker.Core
             ScanOptions options,
             DateTime nowUtc,
             Func<long, bool?> isSeriesEnded,
-            Func<long, HashSet<string>> getPhysicalEpisodeKeys)
+            Func<long, HashSet<string>> getPhysicalEpisodeKeys,
+            CancellationToken cancellationToken = default(CancellationToken))
         {
             var summary = new ScanSummary();
 
@@ -41,28 +43,56 @@ namespace Emby.MissingEpisodesTracker.Core
                 seriesById[s.SeriesId] = s;
             }
 
-            var currentMissing = new HashSet<string>();
+            // Series flagged before this scan started — basis for the "skipped" statistic.
+            var preFlagged = new HashSet<long>(
+                state.Series.Where(s => s.EndedComplete).Select(s => s.SeriesId));
+
             var seenVirtual = new HashSet<string>();
             var seriesWithVirtuals = new HashSet<long>();
 
             foreach (var group in virtualEpisodes.GroupBy(c => c.SeriesId))
             {
+                cancellationToken.ThrowIfCancellationRequested();
+
                 var sid = group.Key;
                 seriesWithVirtuals.Add(sid);
 
                 SeriesState sstate;
                 seriesById.TryGetValue(sid, out sstate);
-                var seriesIgnored = sstate != null && sstate.Ignored;
-                string seriesName = null;
+                string seriesName = group.Select(c => c.SeriesName).FirstOrDefault(n => !string.IsNullOrEmpty(n));
+
+                if (sstate != null && sstate.Ignored)
+                {
+                    // Series-level ignore is a series-level fact: candidates are not tracked at all.
+                    foreach (var c in group)
+                    {
+                        if (!c.Season.HasValue || !c.Episode.HasValue)
+                        {
+                            continue;
+                        }
+                        var key = MakeKey(sid, c.Season.Value, c.Episode.Value);
+                        seenVirtual.Add(key);
+                        summary.IgnoredCount++;
+
+                        // Migrate any stale Missing entries left from before the series was ignored.
+                        TrackedEpisode stale;
+                        if (epByKey.TryGetValue(key, out stale) && stale.Status == EpisodeStatus.Missing)
+                        {
+                            state.Episodes.Remove(stale);
+                            epByKey.Remove(key);
+                        }
+                    }
+                    if (seriesName != null && sstate.SeriesName == null)
+                    {
+                        sstate.SeriesName = seriesName;
+                    }
+                    continue;
+                }
+
                 var seriesMissingCount = 0;
 
                 foreach (var c in group)
                 {
-                    if (seriesName == null && !string.IsNullOrEmpty(c.SeriesName))
-                    {
-                        seriesName = c.SeriesName;
-                    }
-
                     if (!c.Season.HasValue || !c.Episode.HasValue)
                     {
                         summary.SkippedNoIndex++;
@@ -74,17 +104,9 @@ namespace Emby.MissingEpisodesTracker.Core
 
                     TrackedEpisode existing;
                     epByKey.TryGetValue(key, out existing);
-                    var episodeIgnored = existing != null && existing.Status == EpisodeStatus.Ignored;
 
-                    if (seriesIgnored || episodeIgnored)
+                    if (existing != null && existing.Status == EpisodeStatus.Ignored)
                     {
-                        if (existing == null)
-                        {
-                            existing = CreateTracked(c, sid, key, nowUtc);
-                            state.Episodes.Add(existing);
-                            epByKey[key] = existing;
-                        }
-                        existing.Status = EpisodeStatus.Ignored;
                         existing.LastSeenUtc = nowUtc;
                         summary.IgnoredCount++;
                         continue;
@@ -119,13 +141,13 @@ namespace Emby.MissingEpisodesTracker.Core
                         continue;
                     }
 
-                    currentMissing.Add(key);
                     seriesMissingCount++;
 
                     if (existing == null)
                     {
                         var tracked = CreateTracked(c, sid, key, nowUtc);
                         tracked.Status = EpisodeStatus.Missing;
+                        tracked.LastBecameMissingUtc = nowUtc;
                         state.Episodes.Add(tracked);
                         epByKey[key] = tracked;
                         summary.NewlyMissing.Add(tracked);
@@ -140,6 +162,7 @@ namespace Emby.MissingEpisodesTracker.Core
                             // Regression: was resolved/removed, now virtual again (file deleted).
                             existing.Status = EpisodeStatus.Missing;
                             existing.ResolvedUtc = null;
+                            existing.LastBecameMissingUtc = nowUtc;
                             summary.NewlyMissing.Add(existing);
                         }
                         else
@@ -156,7 +179,7 @@ namespace Emby.MissingEpisodesTracker.Core
                     sstate.FlaggedUtc = null;
                     summary.AutoUnflaggedSeries.Add(sid);
                 }
-                else if (options.EnableEndedCompleteSkip && seriesMissingCount == 0 && !seriesIgnored
+                else if (options.EnableEndedCompleteSkip && seriesMissingCount == 0
                          && (sstate == null || !sstate.EndedComplete)
                          && isSeriesEnded(sid) == true)
                 {
@@ -181,18 +204,24 @@ namespace Emby.MissingEpisodesTracker.Core
                 }
             }
 
-            // Resolution pass: previously Missing, no longer virtual at all.
+            // Resolution pass: previously Missing or Ignored, no longer virtual at all.
             var resolvedSeriesIds = new HashSet<long>();
             foreach (var group in state.Episodes
-                         .Where(e => e.Status == EpisodeStatus.Missing
-                                     && !currentMissing.Contains(e.Key)
+                         .Where(e => (e.Status == EpisodeStatus.Missing || e.Status == EpisodeStatus.Ignored)
                                      && !seenVirtual.Contains(e.Key))
                          .GroupBy(e => e.SeriesId)
                          .ToList())
             {
+                cancellationToken.ThrowIfCancellationRequested();
+
                 var physical = getPhysicalEpisodeKeys(group.Key) ?? new HashSet<string>();
+                var hadMissing = false;
                 foreach (var e in group)
                 {
+                    if (e.Status == EpisodeStatus.Missing)
+                    {
+                        hadMissing = true;
+                    }
                     if (physical.Contains(e.Key))
                     {
                         e.Status = EpisodeStatus.Resolved;
@@ -206,7 +235,10 @@ namespace Emby.MissingEpisodesTracker.Core
                     }
                     e.ResolvedUtc = nowUtc;
                 }
-                resolvedSeriesIds.Add(group.Key);
+                if (hadMissing)
+                {
+                    resolvedSeriesIds.Add(group.Key);
+                }
             }
 
             // Series that just became fully resolved may now qualify as Ended+complete.
@@ -245,8 +277,13 @@ namespace Emby.MissingEpisodesTracker.Core
                 }
             }
 
-            summary.SkippedEndedCompleteSeries =
-                state.Series.Count(s => s.EndedComplete && !seriesWithVirtuals.Contains(s.SeriesId));
+            // Skipped = series that entered the scan flagged and are still flagged (their deep
+            // per-series checks never ran).
+            summary.SkippedEndedCompleteSeries = preFlagged.Count(id =>
+            {
+                SeriesState s;
+                return seriesById.TryGetValue(id, out s) && s.EndedComplete;
+            });
             summary.TotalMissing = state.Episodes.Count(e => e.Status == EpisodeStatus.Missing);
             return summary;
         }

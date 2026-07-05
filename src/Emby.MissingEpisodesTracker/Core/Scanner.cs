@@ -14,6 +14,8 @@ namespace Emby.MissingEpisodesTracker.Core
     /// <summary>
     /// SDK-facing scan driver. One global query for virtual episodes drives everything;
     /// per-series lookups only run for the few series that need status or resolution checks.
+    /// Gathering candidates is separated from applying them so the state mutation can run
+    /// atomically inside <see cref="StateStore.Mutate{T}"/>.
     /// </summary>
     public class Scanner
     {
@@ -26,12 +28,8 @@ namespace Emby.MissingEpisodesTracker.Core
             _logger = logger;
         }
 
-        public ScanSummary Scan(TrackerState state, ScanOptions options,
-            CancellationToken cancellationToken, IProgress<double> progress)
+        public List<EpisodeCandidate> GatherCandidates(CancellationToken cancellationToken, IProgress<double> progress)
         {
-            var stopwatch = Stopwatch.StartNew();
-            var startedUtc = DateTime.UtcNow;
-
             if (progress != null) progress.Report(5);
             var virtuals = _libraryManager.GetItemList(new InternalItemsQuery
             {
@@ -40,11 +38,18 @@ namespace Emby.MissingEpisodesTracker.Core
                 Recursive = true
             });
             cancellationToken.ThrowIfCancellationRequested();
-            if (progress != null) progress.Report(35);
+            if (progress != null) progress.Report(30);
 
             var candidates = new List<EpisodeCandidate>(virtuals.Length);
+            var orphans = 0;
             foreach (var episode in virtuals.OfType<Episode>())
             {
+                if (episode.SeriesId <= 0)
+                {
+                    // Broken series linkage would collapse distinct shows into one key space.
+                    orphans++;
+                    continue;
+                }
                 candidates.Add(new EpisodeCandidate
                 {
                     SeriesId = episode.SeriesId,
@@ -57,13 +62,24 @@ namespace Emby.MissingEpisodesTracker.Core
                         : (DateTime?)null
                 });
             }
+            if (orphans > 0)
+            {
+                _logger.Warn("Skipped {0} virtual episode(s) with no series linkage.", orphans);
+            }
             cancellationToken.ThrowIfCancellationRequested();
             if (progress != null) progress.Report(45);
+            return candidates;
+        }
 
+        public ScanSummary ApplyScan(TrackerState state, List<EpisodeCandidate> candidates,
+            ScanOptions options, DateTime startedUtc, Stopwatch stopwatch,
+            CancellationToken cancellationToken, IProgress<double> progress)
+        {
             var summary = ScanLogic.Run(
                 state, candidates, options, startedUtc,
                 IsSeriesEnded,
-                GetPhysicalEpisodeKeys);
+                GetPhysicalEpisodeKeys,
+                cancellationToken);
 
             state.LastScan = new ScanInfo
             {

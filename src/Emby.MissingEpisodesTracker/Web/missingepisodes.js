@@ -46,7 +46,8 @@ define(['loading', 'emby-input', 'emby-button', 'emby-select', 'emby-checkbox'],
         el.innerHTML =
             '<b>' + report.TotalMissing + '</b> missing total · last scan ' +
             escapeHtml(new Date(scan.StartedUtc).toLocaleString()) + ' (' + scan.DurationMs + ' ms): ' +
-            scan.NewCount + ' new, ' + scan.ResolvedCount + ' resolved, ' + scan.RemovedCount + ' removed, ' +
+            scan.NewCount + ' new, ' + scan.KnownCount + ' known, ' + scan.ResolvedCount + ' resolved, ' +
+            scan.RemovedCount + ' removed, ' + scan.IgnoredCount + ' ignored, ' +
             scan.DroppedByFilter + ' filtered, ' + scan.SkippedEndedCompleteSeries + ' ended-complete series skipped';
     }
 
@@ -121,14 +122,30 @@ define(['loading', 'emby-input', 'emby-button', 'emby-select', 'emby-checkbox'],
         container.innerHTML = html;
     }
 
-    function exportCsv(episodes) {
-        var header = 'Series,Season,Episode,Title,AirDate,FirstSeen,Status\n';
-        var rows = episodes.map(function (e) {
-            function q(v) { return '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"'; }
-            return [q(e.SeriesName), e.Season, e.Episode, q(e.Title),
-                q(formatDate(e.PremiereDateUtc)), q(formatDate(e.FirstSeenUtc)), q(e.Status)].join(',');
-        });
-        var blob = new Blob([header + rows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    function csvCell(v) {
+        var s = String(v == null ? '' : v).replace(/"/g, '""');
+        if (/^[=+\-@\t]/.test(s)) {
+            // Neutralize spreadsheet formula injection from provider-supplied titles.
+            s = "'" + s;
+        }
+        return '"' + s + '"';
+    }
+
+    function exportCsv(episodes, seriesList) {
+        var content;
+        if (episodes.length) {
+            var header = 'Series,Season,Episode,Title,AirDate,FirstSeen,Status\n';
+            content = header + episodes.map(function (e) {
+                return [csvCell(e.SeriesName), e.Season, e.Episode, csvCell(e.Title),
+                    csvCell(formatDate(e.PremiereDateUtc)), csvCell(formatDate(e.FirstSeenUtc)), csvCell(e.Status)].join(',');
+            }).join('\n');
+        } else {
+            content = 'Series,EndedComplete,Ignored,Since\n' + (seriesList || []).map(function (s) {
+                return [csvCell(s.SeriesName || ('Series #' + s.SeriesId)), s.EndedComplete, s.Ignored,
+                    csvCell(formatDate(s.FlaggedUtc))].join(',');
+            }).join('\n');
+        }
+        var blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
         var a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
         a.download = 'missing-episodes.csv';
@@ -175,8 +192,20 @@ define(['loading', 'emby-input', 'emby-button', 'emby-select', 'emby-checkbox'],
         });
     }
 
+    function waitForScanIdle(attempts) {
+        if (attempts <= 0) { return Promise.resolve(); }
+        return new Promise(function (resolve) { setTimeout(resolve, 2500); }).then(function () {
+            return ApiClient.getJSON(ApiClient.getUrl('ScheduledTasks')).then(function (tasks) {
+                var task = (tasks || []).filter(function (t) { return t.Key === scanTaskKey; })[0];
+                if (!task || task.State === 'Idle') { return; }
+                return waitForScanIdle(attempts - 1);
+            }, function () { return; });
+        });
+    }
+
     return function (view) {
         var currentEpisodes = [];
+        var currentSeries = [];
 
         function refresh() {
             loading.show();
@@ -184,9 +213,10 @@ define(['loading', 'emby-input', 'emby-button', 'emby-select', 'emby-checkbox'],
             getReport(viewName).then(function (report) {
                 renderSummary(view, report);
                 var container = view.querySelector('#reportContainer');
+                currentSeries = report.Series || [];
                 if (viewName === 'series') {
                     currentEpisodes = [];
-                    renderSeries(container, report.Series || []);
+                    renderSeries(container, currentSeries);
                 } else {
                     currentEpisodes = report.Episodes || [];
                     renderEpisodes(container, currentEpisodes, viewName);
@@ -204,8 +234,8 @@ define(['loading', 'emby-input', 'emby-button', 'emby-select', 'emby-checkbox'],
             loading.show();
             runScan().then(function () {
                 loading.hide();
-                require(['toast'], function (toast) { toast('Scan started. Refresh in a moment.'); });
-                setTimeout(refresh, 4000);
+                require(['toast'], function (toast) { toast('Scan started.'); });
+                waitForScanIdle(48).then(refresh);
             }, function () {
                 loading.hide();
                 require(['toast'], function (toast) { toast('Could not start the scan task.'); });
@@ -213,7 +243,7 @@ define(['loading', 'emby-input', 'emby-button', 'emby-select', 'emby-checkbox'],
         });
 
         view.querySelector('#btnExportCsv').addEventListener('click', function () {
-            exportCsv(currentEpisodes);
+            exportCsv(currentEpisodes, currentSeries);
         });
 
         view.querySelector('#reportContainer').addEventListener('click', function (ev) {

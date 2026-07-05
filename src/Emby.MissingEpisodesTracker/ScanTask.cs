@@ -42,15 +42,20 @@ namespace Emby.MissingEpisodesTracker
         {
             var config = Plugin.Instance.Configuration;
             var store = Plugin.Instance.CreateStateStore(_json);
-            var state = store.Load();
-
             var scanner = new Scanner(_libraryManager, _logger);
-            var summary = scanner.Scan(state, ToOptions(config), cancellationToken, progress);
-            store.Save(state);
+
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            var startedUtc = DateTime.UtcNow;
+
+            // Library gathering runs outside the store lock; the state read-modify-write runs
+            // atomically inside it so concurrent dashboard actions can't be reverted.
+            var candidates = scanner.GatherCandidates(cancellationToken, progress);
+            var summary = store.Mutate(state => scanner.ApplyScan(
+                state, candidates, ToOptions(config), startedUtc, stopwatch, cancellationToken, progress));
 
             _logger.Info(
                 "Missing episodes scan done in {0} ms: {1} new, {2} known, {3} resolved, {4} removed, {5} ignored, {6} dropped by filter, {7} ended-complete series skipped, {8} missing total.",
-                state.LastScan.DurationMs, summary.NewlyMissing.Count, summary.KnownCount,
+                stopwatch.ElapsedMilliseconds, summary.NewlyMissing.Count, summary.KnownCount,
                 summary.ResolvedCount, summary.RemovedCount, summary.IgnoredCount,
                 summary.DroppedByFilter, summary.SkippedEndedCompleteSeries, summary.TotalMissing);
 

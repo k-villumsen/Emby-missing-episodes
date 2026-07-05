@@ -155,16 +155,47 @@ namespace Emby.MissingEpisodesTracker.Tests
         }
 
         [Fact]
-        public void IgnoredSeries_TracksEpisodesAsIgnored()
+        public void IgnoredSeries_IsNotTrackedAtAll()
         {
             var state = new TrackerState();
             state.Series.Add(new SeriesState { SeriesId = 1, Ignored = true });
 
             var summary = Run(state, new[] { Candidate(1, 2, 3, Aired(10)) });
 
-            var tracked = Assert.Single(state.Episodes);
-            Assert.Equal(EpisodeStatus.Ignored, tracked.Status);
+            Assert.Empty(state.Episodes);
             Assert.Empty(summary.NewlyMissing);
+            Assert.Equal(1, summary.IgnoredCount);
+        }
+
+        [Fact]
+        public void IgnoredSeries_MigratesStaleMissingEntriesAway()
+        {
+            var state = new TrackerState();
+            Run(state, new[] { Candidate(1, 2, 3, Aired(10)) });
+            Assert.Single(state.Episodes);
+
+            state.Series.Add(new SeriesState { SeriesId = 1, Ignored = true });
+            Run(state, new[] { Candidate(1, 2, 3, Aired(10)) });
+
+            Assert.Empty(state.Episodes);
+        }
+
+        [Fact]
+        public void IgnoredSeries_DoesNotMaterializeFilteredPlaceholders()
+        {
+            // The M1 case: un-ignoring must not flood the ledger, so filtered placeholder
+            // episodes of an ignored series must never become tracked entries.
+            var state = new TrackerState();
+            state.Series.Add(new SeriesState { SeriesId = 1, Ignored = true });
+
+            Run(state, new[]
+            {
+                Candidate(1, 1, 1, null),           // no-air-date placeholder
+                Candidate(1, 0, 1, Aired(100)),     // special
+                Candidate(1, 1, 2, Aired(10))       // would be missing if not ignored
+            });
+
+            Assert.Empty(state.Episodes);
         }
 
         [Fact]
@@ -207,6 +238,20 @@ namespace Emby.MissingEpisodesTracker.Tests
             Assert.Equal(EpisodeStatus.Missing, state.Episodes[0].Status);
             Assert.Null(state.Episodes[0].ResolvedUtc);
             Assert.Single(summary.NewlyMissing);
+            // The "new since last scan" view keys on LastBecameMissingUtc, not FirstSeenUtc.
+            Assert.Equal(Now, state.Episodes[0].LastBecameMissingUtc);
+        }
+
+        [Fact]
+        public void IgnoredEpisode_WhoseVirtualDisappears_IsResolvedOrRemoved()
+        {
+            var state = new TrackerState();
+            Run(state, new[] { Candidate(1, 2, 3, Aired(10)) });
+            state.Episodes[0].Status = EpisodeStatus.Ignored;
+
+            Run(state, new EpisodeCandidate[0], physical: _ => new HashSet<string> { "1:S02E03" });
+
+            Assert.Equal(EpisodeStatus.Resolved, state.Episodes[0].Status);
         }
 
         [Fact]
@@ -313,6 +358,31 @@ namespace Emby.MissingEpisodesTracker.Tests
 
             Assert.Empty(lookups);
             Assert.True(state.Series[0].EndedComplete); // filtered specials don't unflag
+        }
+
+        [Fact]
+        public void FlaggedSeries_WithOnlyFilteredVirtuals_StillCountsAsSkipped()
+        {
+            var state = new TrackerState();
+            state.Series.Add(new SeriesState { SeriesId = 1, EndedComplete = true });
+
+            var summary = Run(state, new[] { Candidate(1, 0, 1, Aired(100)) }); // special -> filtered
+
+            Assert.Equal(1, summary.SkippedEndedCompleteSeries);
+        }
+
+        [Fact]
+        public void SeriesFlaggedThisScan_IsNotCountedAsSkipped()
+        {
+            var state = new TrackerState();
+            Run(state, new[] { Candidate(1, 2, 3, Aired(10)) }, isEnded: _ => true);
+
+            var summary = Run(state, new EpisodeCandidate[0],
+                isEnded: _ => true,
+                physical: _ => new HashSet<string> { "1:S02E03" });
+
+            Assert.Contains(1L, summary.NewlyFlaggedSeries);
+            Assert.Equal(0, summary.SkippedEndedCompleteSeries);
         }
 
         [Fact]

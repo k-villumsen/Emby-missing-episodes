@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using Emby.MissingEpisodesTracker.Configuration;
 using Emby.MissingEpisodesTracker.Core;
 using MediaBrowser.Common.Configuration;
@@ -16,12 +15,9 @@ namespace Emby.MissingEpisodesTracker
 
         public static Plugin Instance { get; private set; }
 
-        private readonly IApplicationPaths _applicationPaths;
-
         public Plugin(IApplicationPaths applicationPaths, IXmlSerializer xmlSerializer)
             : base(applicationPaths, xmlSerializer)
         {
-            _applicationPaths = applicationPaths;
             Instance = this;
             SetId(new Guid("1f3feded-fa2b-4497-a7a6-8fe855670455"));
         }
@@ -38,7 +34,9 @@ namespace Emby.MissingEpisodesTracker
             var folder = DataFolderPath;
             if (string.IsNullOrEmpty(folder))
             {
-                folder = Path.Combine(_applicationPaths.PluginConfigurationsPath, "MissingEpisodesTracker");
+                // A silent fallback path would fork the state across two locations; fail loud.
+                throw new InvalidOperationException(
+                    "Plugin data folder is not initialized yet; try again after server startup completes.");
             }
             return new StateStore(json, folder);
         }

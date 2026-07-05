@@ -145,6 +145,21 @@ No other runtime dependencies planned; JSON via Emby's `IJsonSerializer` (no New
   package version close to 4.9.5.
 - Dashboard page JS must follow Emby's AMD (`define([...])`) conventions — version-sensitive.
 
+## 9b. As-built deviations (recorded at delivery, 2026-07-05)
+
+- **FR-1/FR-3 ended-complete invalidation:** the "local episode count at flag time" check was
+  replaced by a strictly-stronger mechanism — deleting files causes Emby to regenerate virtual
+  episodes, which auto-unflags the series on the next scan. A count snapshot adds nothing the
+  data source can express that this doesn't catch.
+- **FR-2 season-level ignore:** deferred (series- and episode-level shipped). Add if needed.
+- **FR-6 `GET .../Export`:** CSV export is client-side from the dashboard page (with formula-
+  injection neutralization); no server endpoint.
+- **State model addition:** `LastBecameMissingUtc` distinguishes regressions
+  (resolved → missing again) so notifications and the "new" view agree.
+- **Concurrency contract:** all state read-modify-write cycles go through
+  `StateStore.Mutate` under one process-wide lock; the scan gathers library data outside the
+  lock and applies the diff inside it, so dashboard actions can't be silently reverted.
+
 ## 10. Milestones
 
 1. **M1 Skeleton compiles:** plugin class + config + empty scheduled task; DLL builds.

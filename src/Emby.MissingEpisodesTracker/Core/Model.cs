@@ -24,6 +24,9 @@ namespace Emby.MissingEpisodesTracker.Core
         public DateTime FirstSeenUtc { get; set; }
         public DateTime LastSeenUtc { get; set; }
         public DateTime? ResolvedUtc { get; set; }
+        /// <summary>When the episode last transitioned to Missing (regressions included);
+        /// null in pre-1.1 state files — fall back to FirstSeenUtc.</summary>
+        public DateTime? LastBecameMissingUtc { get; set; }
     }
 
     public class SeriesState

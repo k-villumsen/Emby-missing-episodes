@@ -68,7 +68,8 @@ namespace Emby.MissingEpisodesTracker.Api
             {
                 case "new":
                     episodes = episodes.Where(e =>
-                        e.Status == EpisodeStatus.Missing && e.FirstSeenUtc >= lastScanStart);
+                        e.Status == EpisodeStatus.Missing
+                        && (e.LastBecameMissingUtc ?? e.FirstSeenUtc) >= lastScanStart);
                     break;
                 case "missing":
                     episodes = episodes.Where(e => e.Status == EpisodeStatus.Missing);
@@ -98,86 +99,80 @@ namespace Emby.MissingEpisodesTracker.Api
 
         public void Post(PostIgnore request)
         {
-            var store = Plugin.Instance.CreateStateStore(_json);
-            var state = store.Load();
-
-            if (string.Equals(request.Scope, "series", StringComparison.OrdinalIgnoreCase))
+            Plugin.Instance.CreateStateStore(_json).Mutate<object>(state =>
             {
-                var series = state.Series.FirstOrDefault(s => s.SeriesId == request.SeriesId);
-                if (series == null)
+                if (string.Equals(request.Scope, "series", StringComparison.OrdinalIgnoreCase))
                 {
-                    series = new SeriesState { SeriesId = request.SeriesId };
-                    state.Series.Add(series);
+                    var series = state.Series.FirstOrDefault(s => s.SeriesId == request.SeriesId);
+                    if (series == null)
+                    {
+                        series = new SeriesState { SeriesId = request.SeriesId };
+                        state.Series.Add(series);
+                    }
+                    series.Ignored = true;
+                    if (series.SeriesName == null)
+                    {
+                        series.SeriesName = state.Episodes
+                            .Where(e => e.SeriesId == request.SeriesId)
+                            .Select(e => e.SeriesName).FirstOrDefault(n => n != null);
+                    }
+                    // Series-level ignore untracks the series; individually-ignored episodes
+                    // keep their own status.
+                    state.Episodes.RemoveAll(e =>
+                        e.SeriesId == request.SeriesId && e.Status == EpisodeStatus.Missing);
                 }
-                series.Ignored = true;
-                if (series.SeriesName == null)
+                else
                 {
-                    series.SeriesName = state.Episodes
-                        .Where(e => e.SeriesId == request.SeriesId)
-                        .Select(e => e.SeriesName).FirstOrDefault(n => n != null);
+                    var episode = state.Episodes.FirstOrDefault(e => e.Key == request.Key);
+                    if (episode != null)
+                    {
+                        episode.Status = EpisodeStatus.Ignored;
+                    }
                 }
-                foreach (var e in state.Episodes.Where(e =>
-                             e.SeriesId == request.SeriesId && e.Status == EpisodeStatus.Missing))
-                {
-                    e.Status = EpisodeStatus.Ignored;
-                }
-            }
-            else
-            {
-                var episode = state.Episodes.FirstOrDefault(e => e.Key == request.Key);
-                if (episode != null)
-                {
-                    episode.Status = EpisodeStatus.Ignored;
-                }
-            }
-
-            store.Save(state);
+                return null;
+            });
         }
 
         public void Post(PostUnignore request)
         {
-            var store = Plugin.Instance.CreateStateStore(_json);
-            var state = store.Load();
-
-            if (string.Equals(request.Scope, "series", StringComparison.OrdinalIgnoreCase))
+            Plugin.Instance.CreateStateStore(_json).Mutate<object>(state =>
             {
-                var series = state.Series.FirstOrDefault(s => s.SeriesId == request.SeriesId);
-                if (series != null)
+                if (string.Equals(request.Scope, "series", StringComparison.OrdinalIgnoreCase))
                 {
-                    series.Ignored = false;
+                    var series = state.Series.FirstOrDefault(s => s.SeriesId == request.SeriesId);
+                    if (series != null)
+                    {
+                        series.Ignored = false;
+                    }
+                    // Nothing else to do: the next scan re-tracks the series' missing episodes.
                 }
-                foreach (var e in state.Episodes.Where(e =>
-                             e.SeriesId == request.SeriesId && e.Status == EpisodeStatus.Ignored))
+                else
                 {
-                    // Back to Missing; the next scan verifies and resolves/removes as needed.
-                    e.Status = EpisodeStatus.Missing;
+                    var episode = state.Episodes.FirstOrDefault(e => e.Key == request.Key);
+                    if (episode != null)
+                    {
+                        // Back to Missing; the next scan verifies and resolves/removes as needed.
+                        episode.Status = EpisodeStatus.Missing;
+                        episode.ResolvedUtc = null;
+                        episode.LastBecameMissingUtc = DateTime.UtcNow;
+                    }
                 }
-            }
-            else
-            {
-                var episode = state.Episodes.FirstOrDefault(e => e.Key == request.Key);
-                if (episode != null)
-                {
-                    episode.Status = EpisodeStatus.Missing;
-                }
-            }
-
-            store.Save(state);
+                return null;
+            });
         }
 
         public void Post(PostResetEndedComplete request)
         {
-            var store = Plugin.Instance.CreateStateStore(_json);
-            var state = store.Load();
-
-            foreach (var series in state.Series.Where(s =>
-                         s.EndedComplete && (request.SeriesId == null || s.SeriesId == request.SeriesId)))
+            Plugin.Instance.CreateStateStore(_json).Mutate<object>(state =>
             {
-                series.EndedComplete = false;
-                series.FlaggedUtc = null;
-            }
-
-            store.Save(state);
+                foreach (var series in state.Series.Where(s =>
+                             s.EndedComplete && (request.SeriesId == null || s.SeriesId == request.SeriesId)))
+                {
+                    series.EndedComplete = false;
+                    series.FlaggedUtc = null;
+                }
+                return null;
+            });
         }
     }
 }
