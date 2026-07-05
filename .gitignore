@@ -1,0 +1,14 @@
+# Local secrets
+config.local.ps1
+
+# .NET build output
+bin/
+obj/
+*.user
+
+# IDE
+.vs/
+.idea/
+
+# Local reports
+*.csv
