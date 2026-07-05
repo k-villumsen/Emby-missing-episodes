@@ -51,6 +51,7 @@ namespace Emby.MissingEpisodesTracker
                     DisplayName = "Missing Episodes",
                     EmbeddedResourcePath = GetType().Namespace + ".Web.missingepisodes.html",
                     IsMainConfigPage = true,
+                    EnableInMainMenu = true,
                     MenuIcon = "video_library"
                 },
                 new PluginPageInfo
