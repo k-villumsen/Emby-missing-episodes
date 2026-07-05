@@ -168,6 +168,8 @@ define(['loading', 'emby-input', 'emby-button', 'emby-select', 'emby-checkbox'],
 
     function loadConfig(view) {
         return ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+            view.querySelector('#txtApiKey').value = config.ApiKey || '';
+            view.querySelector('#txtServerUrl').value = config.ServerUrl || 'http://localhost:8096';
             view.querySelector('#chkIgnoreNoAirDate').checked = config.IgnoreNoAirDate;
             view.querySelector('#chkIgnoreUnaired').checked = config.IgnoreUnaired;
             view.querySelector('#txtGraceDays').value = config.GraceDays;
@@ -180,6 +182,8 @@ define(['loading', 'emby-input', 'emby-button', 'emby-select', 'emby-checkbox'],
     function saveConfig(view) {
         loading.show();
         return ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+            config.ApiKey = view.querySelector('#txtApiKey').value.trim();
+            config.ServerUrl = view.querySelector('#txtServerUrl').value.trim() || 'http://localhost:8096';
             config.IgnoreNoAirDate = view.querySelector('#chkIgnoreNoAirDate').checked;
             config.IgnoreUnaired = view.querySelector('#chkIgnoreUnaired').checked;
             config.GraceDays = parseInt(view.querySelector('#txtGraceDays').value, 10) || 0;

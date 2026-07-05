@@ -6,9 +6,12 @@ from scratch on every look and remembers nothing.
 
 ## What it does
 
-- **Scheduled scan** (daily 04:00 by default, configurable like any Emby task) queries the
-  library's virtual (missing) episodes through the server's internal API — one global query,
-  no HTTP round-trips, fast even on large libraries.
+- **Scheduled scan** (daily 04:00 by default, configurable like any Emby task) runs Emby's
+  own missing-episode computation once via a localhost call to `/Shows/Missing` — the same
+  engine behind Metadata Manager. On Emby 4.9 missing episodes are computed dynamically
+  (they are not database rows), and on a large library that computation takes minutes; the
+  plugin pays that cost once per scan in the background, so looking at the report is always
+  instant. Requires an Emby API key in the plugin settings (Dashboard → Advanced → API Keys).
 - **Remembers state** between scans in `tracker_state.json` (plugin data folder):
   - *New* vs. *known* missing episodes (first-seen / last-seen timestamps)
   - *Resolved* history — when a missing episode shows up in the library, it's recorded
@@ -32,7 +35,8 @@ from scratch on every look and remembers nothing.
 - Emby Server **4.9.x** (built and verified against SDK 4.9.1.90; the plugin API is
   identical in 4.8, so 4.8 servers should also work)
 - The per-library option **"Display missing episodes within seasons"** must be enabled for
-  your TV libraries — that is the data source.
+  your TV libraries — `/Shows/Missing` is the data source.
+- An **Emby API key** pasted into the plugin settings (used for the scan's self-call).
 
 ## Build
 

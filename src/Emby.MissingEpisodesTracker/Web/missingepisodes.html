@@ -36,6 +36,14 @@
             <div class="verticalSection">
                 <h2 class="sectionTitle">Settings</h2>
                 <form id="missingEpisodesTrackerForm">
+                    <div class="inputContainer" style="max-width:420px;">
+                        <input is="emby-input" type="text" id="txtApiKey" label="Emby API key (required)" autocomplete="off" />
+                        <div class="fieldDescription">The scan calls this server's own /Shows/Missing endpoint, which needs a key. Create one under Dashboard &gt; Advanced &gt; API Keys.</div>
+                    </div>
+                    <div class="inputContainer" style="max-width:420px;">
+                        <input is="emby-input" type="text" id="txtServerUrl" label="Server URL (as seen from the server itself)" />
+                        <div class="fieldDescription">Default http://localhost:8096 is right for almost every install.</div>
+                    </div>
                     <div class="checkboxContainer checkboxContainer-withDescription">
                         <label>
                             <input is="emby-checkbox" type="checkbox" id="chkIgnoreNoAirDate" />

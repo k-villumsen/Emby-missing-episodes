@@ -38,18 +38,20 @@ namespace Emby.MissingEpisodesTracker
 
         public string Category => Plugin.PluginName;
 
-        public Task Execute(CancellationToken cancellationToken, IProgress<double> progress)
+        public async Task Execute(CancellationToken cancellationToken, IProgress<double> progress)
         {
             var config = Plugin.Instance.Configuration;
             var store = Plugin.Instance.CreateStateStore(_json);
-            var scanner = new Scanner(_libraryManager, _logger);
+            var scanner = new Scanner(_libraryManager, _json, _logger);
 
             var stopwatch = System.Diagnostics.Stopwatch.StartNew();
             var startedUtc = DateTime.UtcNow;
 
-            // Library gathering runs outside the store lock; the state read-modify-write runs
-            // atomically inside it so concurrent dashboard actions can't be reverted.
-            var candidates = scanner.GatherCandidates(cancellationToken, progress);
+            // Gathering (the /Shows/Missing self-call) runs outside the store lock; the state
+            // read-modify-write runs atomically inside it so concurrent dashboard actions
+            // can't be reverted.
+            var candidates = await scanner.GatherCandidatesAsync(
+                config.ServerUrl, config.ApiKey, cancellationToken, progress).ConfigureAwait(false);
             var summary = store.Mutate(state => scanner.ApplyScan(
                 state, candidates, ToOptions(config), startedUtc, stopwatch, cancellationToken, progress));
 
@@ -85,7 +87,6 @@ namespace Emby.MissingEpisodesTracker
             }
 
             if (progress != null) progress.Report(100);
-            return Task.CompletedTask;
         }
 
         public IEnumerable<TaskTriggerInfo> GetDefaultTriggers()

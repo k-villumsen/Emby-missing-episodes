@@ -147,6 +147,16 @@ No other runtime dependencies planned; JSON via Emby's `IJsonSerializer` (no New
 
 ## 9b. As-built deviations (recorded at delivery, 2026-07-05)
 
+- **Data source (major, discovered live on 4.9.5):** missing episodes on Emby 4.9 are NOT
+  database rows — `/Shows/Missing` computes them dynamically per request (items return with
+  empty Ids; the internal `InternalItemsQuery.IsVirtualItem` path finds nothing, and with no
+  user context the filter is ignored outright, returning the whole episode table). The scan
+  therefore gathers candidates via a **localhost self-call to `/Shows/Missing`** (the same
+  engine as Metadata Manager), which requires an **API key in plugin settings**. The ~3-minute
+  computation on this library runs once per scheduled scan in the background; the dashboard
+  always reads instantly from state. Per-series lookups (series status, physical episodes)
+  remain internal queries — those are real rows.
+
 - **FR-1/FR-3 ended-complete invalidation:** the "local episode count at flag time" check was
   replaced by a strictly-stronger mechanism — deleting files causes Emby to regenerate virtual
   episodes, which auto-unflags the series on the next scan. A count snapshot adds nothing the

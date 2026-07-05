@@ -2,84 +2,124 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Net.Http;
 using System.Threading;
+using System.Threading.Tasks;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.Logging;
+using MediaBrowser.Model.Serialization;
 
 namespace Emby.MissingEpisodesTracker.Core
 {
     /// <summary>
-    /// SDK-facing scan driver. One global query for virtual episodes drives everything;
-    /// per-series lookups only run for the few series that need status or resolution checks.
-    /// Gathering candidates is separated from applying them so the state mutation can run
-    /// atomically inside <see cref="StateStore.Mutate{T}"/>.
+    /// SDK-facing scan driver. On Emby 4.9 missing episodes exist only as transient DTOs
+    /// computed by the /Shows/Missing endpoint (they have no database rows — verified live:
+    /// items come back with empty Ids), so gathering runs Emby's own computation once via a
+    /// localhost self-call. Per-series lookups (series status, physical episodes) use fast
+    /// internal queries since those ARE database rows. Gathering is separated from applying
+    /// so the state mutation can run atomically inside <see cref="StateStore.Mutate{T}"/>.
     /// </summary>
     public class Scanner
     {
+        private static readonly HttpClient Http = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
+
         private readonly ILibraryManager _libraryManager;
+        private readonly IJsonSerializer _json;
         private readonly ILogger _logger;
 
-        public Scanner(ILibraryManager libraryManager, ILogger logger)
+        public Scanner(ILibraryManager libraryManager, IJsonSerializer json, ILogger logger)
         {
             _libraryManager = libraryManager;
+            _json = json;
             _logger = logger;
         }
 
-        public List<EpisodeCandidate> GatherCandidates(CancellationToken cancellationToken, IProgress<double> progress)
+        public async Task<List<EpisodeCandidate>> GatherCandidatesAsync(string serverUrl, string apiKey,
+            CancellationToken cancellationToken, IProgress<double> progress)
         {
-            if (progress != null) progress.Report(5);
-            var virtuals = _libraryManager.GetItemList(new InternalItemsQuery
+            if (string.IsNullOrWhiteSpace(apiKey))
             {
-                IncludeItemTypes = new[] { "Episode" },
-                IsVirtualItem = true,
-                Recursive = true
-            });
-            cancellationToken.ThrowIfCancellationRequested();
-            if (progress != null) progress.Report(30);
+                throw new InvalidOperationException(
+                    "No API key configured. Create one under Dashboard > Advanced > API Keys and paste it into the Missing Episodes Tracker settings.");
+            }
+            var baseUrl = string.IsNullOrWhiteSpace(serverUrl)
+                ? "http://localhost:8096"
+                : serverUrl.TrimEnd('/');
+            var key = Uri.EscapeDataString(apiKey.Trim());
 
-            var candidates = new List<EpisodeCandidate>(virtuals.Length);
-            var orphans = 0;
-            var nonVirtual = 0;
-            foreach (var episode in virtuals.OfType<Episode>())
+            if (progress != null) progress.Report(2);
+            var userId = await GetAnyUserIdAsync(baseUrl, key, cancellationToken).ConfigureAwait(false);
+            if (progress != null) progress.Report(5);
+
+            _logger.Info("Requesting /Shows/Missing from the server — this runs Emby's own missing-episode computation and can take minutes on a large library...");
+            var url = baseUrl + "/emby/Shows/Missing?Recursive=true&Fields=PremiereDate&UserId=" + userId + "&api_key=" + key;
+
+            MissingItemsResponse data;
+            using (var response = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false))
             {
-                if (!episode.IsVirtualItem)
+                response.EnsureSuccessStatusCode();
+                using (var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
                 {
-                    // The query-level IsVirtualItem filter is not honored on non-user internal
-                    // queries (observed on 4.9.5: it returns the whole episode table), so the
-                    // entity-level flag is the authoritative check.
-                    nonVirtual++;
-                    continue;
+                    data = _json.DeserializeFromStream<MissingItemsResponse>(stream);
                 }
-                if (episode.SeriesId <= 0)
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var items = data != null && data.Items != null ? data.Items : new MissingItemDto[0];
+            var candidates = new List<EpisodeCandidate>(items.Length);
+            var orphans = 0;
+            foreach (var item in items)
+            {
+                long seriesId = 0;
+                if (!string.IsNullOrEmpty(item.SeriesId))
                 {
-                    // Broken series linkage would collapse distinct shows into one key space.
+                    try { seriesId = _libraryManager.GetInternalId(item.SeriesId); }
+                    catch { seriesId = 0; }
+                }
+                if (seriesId <= 0)
+                {
                     orphans++;
                     continue;
                 }
                 candidates.Add(new EpisodeCandidate
                 {
-                    SeriesId = episode.SeriesId,
-                    SeriesName = episode.SeriesName,
-                    Season = episode.ParentIndexNumber,
-                    Episode = episode.IndexNumber,
-                    Title = episode.Name,
-                    PremiereDateUtc = episode.PremiereDate.HasValue
-                        ? episode.PremiereDate.Value.UtcDateTime
+                    SeriesId = seriesId,
+                    SeriesName = item.SeriesName,
+                    Season = item.ParentIndexNumber,
+                    Episode = item.IndexNumber,
+                    Title = item.Name,
+                    PremiereDateUtc = item.PremiereDate.HasValue
+                        ? item.PremiereDate.Value.UtcDateTime
                         : (DateTime?)null
                 });
             }
             if (orphans > 0)
             {
-                _logger.Warn("Skipped {0} virtual episode(s) with no series linkage.", orphans);
+                _logger.Warn("Skipped {0} missing episode(s) with no resolvable series id.", orphans);
             }
-            _logger.Info("Virtual-episode query returned {0} item(s); {1} virtual after entity-level check.",
-                virtuals.Length, candidates.Count);
-            cancellationToken.ThrowIfCancellationRequested();
+            _logger.Info("/Shows/Missing returned {0} item(s); {1} usable candidates.", items.Length, candidates.Count);
             if (progress != null) progress.Report(45);
             return candidates;
+        }
+
+        private async Task<string> GetAnyUserIdAsync(string baseUrl, string escapedApiKey, CancellationToken cancellationToken)
+        {
+            using (var response = await Http.GetAsync(baseUrl + "/emby/Users?api_key=" + escapedApiKey, cancellationToken).ConfigureAwait(false))
+            {
+                response.EnsureSuccessStatusCode();
+                using (var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
+                {
+                    var users = _json.DeserializeFromStream<UserIdDto[]>(stream);
+                    if (users == null || users.Length == 0 || string.IsNullOrEmpty(users[0].Id))
+                    {
+                        throw new InvalidOperationException("Could not resolve a user id via /Users (required by /Shows/Missing).");
+                    }
+                    return users[0].Id;
+                }
+            }
         }
 
         public ScanSummary ApplyScan(TrackerState state, List<EpisodeCandidate> candidates,
@@ -125,7 +165,6 @@ namespace Emby.MissingEpisodesTracker.Core
             var items = _libraryManager.GetItemList(new InternalItemsQuery
             {
                 IncludeItemTypes = new[] { "Episode" },
-                IsVirtualItem = false,
                 Recursive = true,
                 AncestorIds = new[] { seriesId }
             });
@@ -133,12 +172,6 @@ namespace Emby.MissingEpisodesTracker.Core
             var keys = new HashSet<string>();
             foreach (var episode in items.OfType<Episode>())
             {
-                if (episode.IsVirtualItem)
-                {
-                    // Same query-filter caveat as GatherCandidates: enforce at entity level,
-                    // otherwise virtual rows would count as "physically present".
-                    continue;
-                }
                 if (!episode.ParentIndexNumber.HasValue || !episode.IndexNumber.HasValue)
                 {
                     continue;
@@ -154,6 +187,28 @@ namespace Emby.MissingEpisodesTracker.Core
                 }
             }
             return keys;
+        }
+
+        // DTOs for the /Shows/Missing and /Users self-calls.
+        public class MissingItemsResponse
+        {
+            public MissingItemDto[] Items { get; set; }
+            public int TotalRecordCount { get; set; }
+        }
+
+        public class MissingItemDto
+        {
+            public string Name { get; set; }
+            public string SeriesName { get; set; }
+            public string SeriesId { get; set; }
+            public int? ParentIndexNumber { get; set; }
+            public int? IndexNumber { get; set; }
+            public DateTimeOffset? PremiereDate { get; set; }
+        }
+
+        public class UserIdDto
+        {
+            public string Id { get; set; }
         }
     }
 }
