@@ -246,6 +246,15 @@ define(['loading', 'emby-input', 'emby-button', 'emby-select', 'emby-checkbox'],
             exportCsv(currentEpisodes, currentSeries);
         });
 
+        view.querySelector('#btnResetState').addEventListener('click', function () {
+            require(['confirm'], function (confirm) {
+                confirm('This clears the whole ledger: history, ignores and ended-complete flags. The next scan rebuilds from scratch. Continue?', 'Reset state').then(function () {
+                    loading.show();
+                    post('ResetState', {}).then(function () { refresh(); }, function () { loading.hide(); });
+                });
+            });
+        });
+
         view.querySelector('#reportContainer').addEventListener('click', function (ev) {
             var btn = ev.target.closest ? ev.target.closest('button') : null;
             if (!btn) { return; }

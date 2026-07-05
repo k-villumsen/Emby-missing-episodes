@@ -41,6 +41,12 @@ namespace Emby.MissingEpisodesTracker.Api
         public long? SeriesId { get; set; }
     }
 
+    [Route("/MissingEpisodesTracker/ResetState", "POST", Summary = "Clears the entire tracker state (ledger, flags, ignores)")]
+    [Authenticated(Roles = "Admin")]
+    public class PostResetState : IReturnVoid
+    {
+    }
+
     public class ReportResponse
     {
         public ScanInfo LastScan { get; set; }
@@ -157,6 +163,17 @@ namespace Emby.MissingEpisodesTracker.Api
                         episode.LastBecameMissingUtc = DateTime.UtcNow;
                     }
                 }
+                return null;
+            });
+        }
+
+        public void Post(PostResetState request)
+        {
+            Plugin.Instance.CreateStateStore(_json).Mutate<object>(state =>
+            {
+                state.Episodes.Clear();
+                state.Series.Clear();
+                state.LastScan = null;
                 return null;
             });
         }

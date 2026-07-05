@@ -42,8 +42,17 @@ namespace Emby.MissingEpisodesTracker.Core
 
             var candidates = new List<EpisodeCandidate>(virtuals.Length);
             var orphans = 0;
+            var nonVirtual = 0;
             foreach (var episode in virtuals.OfType<Episode>())
             {
+                if (!episode.IsVirtualItem)
+                {
+                    // The query-level IsVirtualItem filter is not honored on non-user internal
+                    // queries (observed on 4.9.5: it returns the whole episode table), so the
+                    // entity-level flag is the authoritative check.
+                    nonVirtual++;
+                    continue;
+                }
                 if (episode.SeriesId <= 0)
                 {
                     // Broken series linkage would collapse distinct shows into one key space.
@@ -66,6 +75,8 @@ namespace Emby.MissingEpisodesTracker.Core
             {
                 _logger.Warn("Skipped {0} virtual episode(s) with no series linkage.", orphans);
             }
+            _logger.Info("Virtual-episode query returned {0} item(s); {1} virtual after entity-level check.",
+                virtuals.Length, candidates.Count);
             cancellationToken.ThrowIfCancellationRequested();
             if (progress != null) progress.Report(45);
             return candidates;
@@ -122,6 +133,12 @@ namespace Emby.MissingEpisodesTracker.Core
             var keys = new HashSet<string>();
             foreach (var episode in items.OfType<Episode>())
             {
+                if (episode.IsVirtualItem)
+                {
+                    // Same query-filter caveat as GatherCandidates: enforce at entity level,
+                    // otherwise virtual rows would count as "physically present".
+                    continue;
+                }
                 if (!episode.ParentIndexNumber.HasValue || !episode.IndexNumber.HasValue)
                 {
                     continue;
