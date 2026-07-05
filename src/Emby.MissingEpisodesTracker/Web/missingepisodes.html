@@ -1,0 +1,83 @@
+<div id="missingEpisodesTrackerPage" data-role="page"
+     class="page type-interior pluginConfigurationPage missingEpisodesTrackerPage"
+     data-controller="__plugin/missingepisodestracker.js">
+    <div data-role="content">
+        <div class="content-primary">
+
+            <div class="verticalSection">
+                <div class="sectionTitleContainer flex align-items-center">
+                    <h2 class="sectionTitle">Missing Episodes Tracker</h2>
+                    <button is="emby-button" type="button" id="btnRunScan" class="raised" style="margin-left:1em;">
+                        <span>Run scan now</span>
+                    </button>
+                    <button is="emby-button" type="button" id="btnExportCsv" class="raised" style="margin-left:.5em;">
+                        <span>Export CSV</span>
+                    </button>
+                </div>
+                <div id="scanSummary" class="fieldDescription" style="margin:.5em 0 1em 0;">Loading…</div>
+            </div>
+
+            <div class="verticalSection">
+                <div class="selectContainer" style="max-width:280px;">
+                    <select is="emby-select" id="selectView" label="View">
+                        <option value="missing">All missing</option>
+                        <option value="new">New since last scan</option>
+                        <option value="resolved">Resolved / removed</option>
+                        <option value="ignored">Ignored</option>
+                        <option value="series">Series flags</option>
+                    </select>
+                </div>
+                <div id="reportContainer" style="overflow-x:auto;"></div>
+            </div>
+
+            <div class="verticalSection">
+                <h2 class="sectionTitle">Settings</h2>
+                <form id="missingEpisodesTrackerForm">
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label>
+                            <input is="emby-checkbox" type="checkbox" id="chkIgnoreNoAirDate" />
+                            <span>Ignore episodes without an air date</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Filters provider placeholder episodes (the main false-positive source).</div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label>
+                            <input is="emby-checkbox" type="checkbox" id="chkIgnoreUnaired" />
+                            <span>Ignore unaired episodes</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Episodes are only flagged after they have aired.</div>
+                    </div>
+                    <div class="inputContainer" style="max-width:280px;">
+                        <input is="emby-input" type="number" id="txtGraceDays" pattern="[0-9]*" min="0" max="60" label="Grace period (days)" />
+                        <div class="fieldDescription">Wait this many days after airing before flagging, so your downloader has time.</div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label>
+                            <input is="emby-checkbox" type="checkbox" id="chkIgnoreSpecials" />
+                            <span>Ignore specials (Season 0)</span>
+                        </label>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label>
+                            <input is="emby-checkbox" type="checkbox" id="chkEndedCompleteSkip" />
+                            <span>Skip ended series with complete collections</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Flags Ended series with nothing missing and skips them on later scans.</div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label>
+                            <input is="emby-checkbox" type="checkbox" id="chkNotify" />
+                            <span>Notify when new missing episodes are found</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Writes an entry to the server activity log after each scan that finds something new.</div>
+                    </div>
+                    <br />
+                    <button is="emby-button" type="submit" class="raised button-submit block emby-button">
+                        <span>Save</span>
+                    </button>
+                </form>
+            </div>
+
+        </div>
+    </div>
+</div>
